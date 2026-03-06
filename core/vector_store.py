@@ -3,7 +3,8 @@
 import os 
 import shutil
 from typing import List
-from langchain_community.vectorstores import Chroma 
+#from langchain_community.vectorstores import Chroma 
+from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.vectorstores import VectorStoreRetriever
 from core.llm_config import get_embeddings
@@ -75,7 +76,7 @@ class VectorStore:
     
         self.db = Chroma(
             persist_directory = self.persist_directory,
-            embedding_fucntion = self.embeddings,
+            embedding_function = self.embeddings,
             collection_name = self.collection_name
         )
         count = self.db._collection.count()

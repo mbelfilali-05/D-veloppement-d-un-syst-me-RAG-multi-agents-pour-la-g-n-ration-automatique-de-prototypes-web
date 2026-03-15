@@ -56,12 +56,17 @@ class PDFLoader:
         print(f"📄 PDF chargé : {len(pages)} pages")
 
         # Découpe en chunks
-        chunks = self.text_splitter.split_documents(pages)
+        raw_chunks = self.text_splitter.split_documents(pages)
 
-        print(f"✂️  Découpage : {len(chunks)} chunks "
+        print(f"✂️  Découpage : {len(raw_chunks)} chunks "
               f"(taille={self.chunk_size}, overlap={self.chunk_overlap})")
 
-        return chunks
+            # Filtre les chunks trop courts (parasites sémantiques)
+        MIN_CHUNK_SIZE = 100  # caractères
+        chunks = [c for c in raw_chunks if len(c.page_content.strip()) >= MIN_CHUNK_SIZE]
+        print(f"✂️  Après filtrage : {len(chunks)} chunks valides")
+   
+        return chunks 
 
     def get_stats(self, chunks: List[Document]) -> dict:
         """

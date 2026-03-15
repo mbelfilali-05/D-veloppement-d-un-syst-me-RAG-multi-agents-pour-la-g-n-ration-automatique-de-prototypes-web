@@ -5,6 +5,8 @@ from langchain_core.output_parsers import StrOutputParser
 
 from agents.base_agent import BaseAgent
 from core.vector_store import VectorStore
+from utils.token_tracker import TokenTracker
+
 
 
 PROMPT_TEMPLATE = """
@@ -107,8 +109,10 @@ class CRAgent(BaseAgent):
             self._log(f"{len(docs)} chunks récupérés pour le contexte RAG")
 
             # Invoque la chain LCEL
-            summary = self.chain.invoke({"context": context})
-
+            with TokenTracker("CRAgent") as tracker:
+                summary = self.chain.invoke({"context": context})
+            tracker.report()
+            
             self._log("✅ Analyse terminée")
 
             return {

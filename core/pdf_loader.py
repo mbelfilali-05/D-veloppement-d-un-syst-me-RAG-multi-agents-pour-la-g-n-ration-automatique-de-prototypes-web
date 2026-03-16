@@ -15,8 +15,8 @@ class PDFLoader:
 
     def __init__(
         self,
-        chunk_size: int = 1000,
-        chunk_overlap: int = 200
+        chunk_size: int = 600,
+        chunk_overlap: int = 150
     ):
         """
         Args:

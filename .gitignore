@@ -37,3 +37,5 @@ uploads/
 *.pdf
 
 test_*.py
+
+experiments/results/

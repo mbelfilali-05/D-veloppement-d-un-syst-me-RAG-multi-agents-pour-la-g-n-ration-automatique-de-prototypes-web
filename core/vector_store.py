@@ -49,6 +49,12 @@ class VectorStore:
             shutil.rmtree(self.persist_directory)
             print(f"🗑️  Ancienne base supprimée")
 
+        # 🔽 Ajout d'un index chronologique global à chaque chunk
+        for idx, chunk in enumerate(chunks):
+            chunk.metadata["chunk_index"] = idx
+            # Optionnel : ajouter aussi un index par page
+            # chunk.metadata["page_index"] = idx  # si vous voulez un tri plus fin
+
         print(f"⚙️  Vectorisation de {len(chunks)} chunks...")
         print(f"   (Cette opération appelle l'API OpenAI)")
 

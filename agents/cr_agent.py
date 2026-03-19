@@ -8,7 +8,7 @@ from core.vector_store import VectorStore
 from utils.token_tracker import TokenTracker
 
 
-
+#prompt par defaut pour CRAgent — peut être modifié à l'instanciation
 PROMPT_TEMPLATE = """
 Tu es un expert en analyse de cahiers des charges et en conception d'interfaces web.
 
@@ -42,12 +42,28 @@ class CRAgent(BaseAgent):
     une description structurée de toutes les vues à prototyper.
     """
 
-    def __init__(self, vector_store: VectorStore):
+    def __init__(self, vector_store: VectorStore,
+                 retrieval_k: int = 4,
+                 retrieval_query: str = None,
+                 prompt_template: str = PROMPT_TEMPLATE
+                ):
         """
         Args:
             vector_store: Instance VectorStore déjà chargée avec le PDF
+            retrieval_k: nombre de chunks à récupérer
+            retrieval_query: requête à utiliser pour le retrieval (si None, utilise une requête par défaut)
+            prompt_template: template du prompt (peut être modifié)
         """
         self.vector_store = vector_store
+        self.retrieval_k = retrieval_k
+        self.retrieval_query = retrieval_query or (
+            "Quelles sont toutes les pages, vues, écrans et fonctionnalités "
+            "de l'application web décrite dans ce cahier des charges ? "
+            "Quels sont les composants d'interface, les formulaires, "
+            "les tableaux de bord et les interactions utilisateur ?"
+        )
+        self.prompt_template = prompt_template
+        self.last_token_usage = 0   # pour stocker le dernier compteur
         # BaseAgent.__init__ appelle _build_chain() — vector_store doit
         # exister AVANT super().__init__()
         super().__init__(name="CRAgent", temperature=0.0)
@@ -57,7 +73,7 @@ class CRAgent(BaseAgent):
         Chain LCEL : prompt → LLM → texte brut
         Le contexte RAG est injecté dans run() via le retriever.
         """
-        prompt = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
+        prompt = ChatPromptTemplate.from_template(self.prompt_template)
         return prompt | self.llm | StrOutputParser()
 
     def run(self, state: dict) -> dict:
@@ -75,17 +91,17 @@ class CRAgent(BaseAgent):
         self._log("Analyse du cahier des charges en cours...")
 
         try:
-            retriever = self.vector_store.get_retriever(k=8)
+            retriever = self.vector_store.get_retriever(k=self.retrieval_k)
 
             # On interroge sur les pages et fonctionnalités du projet
-            query = (
-                "Quelles sont toutes les pages, vues, écrans et fonctionnalités "
-                "de l'application web décrite dans ce cahier des charges ? "
-                "Quels sont les composants d'interface, les formulaires, "
-                "les tableaux de bord et les interactions utilisateur ?"
-            )
+            # query = (
+            #     "Quelles sont toutes les pages, vues, écrans et fonctionnalités "
+            #     "de l'application web décrite dans ce cahier des charges ? "
+            #     "Quels sont les composants d'interface, les formulaires, "
+            #     "les tableaux de bord et les interactions utilisateur ?"
+            # )
 
-            docs = retriever.invoke(query)
+            docs = retriever.invoke(self.retrieval_query)
 
             if not docs:
                 raise ValueError("Aucun document récupéré depuis ChromaDB.")
@@ -111,6 +127,7 @@ class CRAgent(BaseAgent):
             # Invoque la chain LCEL
             with TokenTracker("CRAgent") as tracker:
                 summary = self.chain.invoke({"context": context})
+            self.last_token_usage = tracker.total_tokens   # capture du nombre de tokens
             tracker.report()
             
             self._log("✅ Analyse terminée")

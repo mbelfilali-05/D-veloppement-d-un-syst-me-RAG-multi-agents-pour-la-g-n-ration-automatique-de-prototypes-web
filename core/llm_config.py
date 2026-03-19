@@ -24,6 +24,7 @@ def get_llm(temperature: float = None) -> ChatOpenAI:
         os.getenv("OPENAI_TEMPERATURE", 0.0)
     )
     
+    #gpt-4o-mini est plus rapide et moins cher que gpt-4, idéal pour les tests et l'évaluation, et parfais pour generer des resumes de cahier des charges. Pour une analyse plus approfondie ou des résumés plus longs, gpt-4 peut être préféré.
     return ChatOpenAI(
         model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         temperature=temp,

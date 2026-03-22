@@ -51,6 +51,7 @@ class ExperimentResult:
     tokens_total: int
     duration_seconds: float
     error: Optional[str] = None
+    context: str = ""   # Chunks RAG concaténés — source de vérité pour l'évaluation,← les chunks RAG utilisés pour générer le summary,il faut stocker le contexte RAG
  
     # Calculés à la création
     chunks_retrieved: int = 0
@@ -78,6 +79,7 @@ class ExperimentResult:
             "chunks_retrieved": self.chunks_retrieved,
             "unique_pages": self.unique_pages,
             "summary_word_count": self.summary_word_count,
+            "context": self.context,
             "error": self.error,
         }
  
@@ -95,6 +97,7 @@ class ExperimentResult:
             tokens_completion=data["tokens_completion"],
             tokens_total=data["tokens_total"],
             duration_seconds=data["duration_seconds"],
+            context=data.get("context", ""),
             error=data.get("error"),
         )
  

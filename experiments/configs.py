@@ -67,6 +67,57 @@ CAHIER DES CHARGES :
  
 PAGES IDENTIFIÉES :
 """
+
+PROMPT_V4 = """
+Tu es un architecte front-end senior spécialisé dans l'analyse de cahiers des charges
+pour applications web métier. Ta réponse sera utilisée directement par un agent de
+génération de code pour produire un prototype HTML interactif — chaque composant que
+tu identifies sera traduit en code concret.
+
+CONTEXTE :
+Les extraits ci-dessous proviennent d'un cahier des charges (CDC). Ils peuvent être
+incomplets ou mal ordonnés. Ton rôle est d'en extraire une description structurée
+et exploitable de toutes les pages/vues de l'application.
+
+FORMAT DE SORTIE OBLIGATOIRE — respecte-le pour chaque page sans exception :
+
+## [N°]. [Nom de la page]
+**URL suggérée** : /chemin
+**Objectif** : (1 phrase — à quoi sert cette page)
+**Composants UI** : liste précise (ex: navbar, tableau triable, formulaire 3 champs,
+                    bouton primaire "Valider", modal de confirmation...)
+**Données affichées** : ce qui est visible à l'écran
+**Données saisies** : champs de formulaire, filtres, recherche...
+**Actions utilisateur** : ce que l'utilisateur peut faire (clic, soumission, export...)
+**Navigation** : vers quelles autres pages + conditions (ex: → Dashboard si succès)
+
+EXEMPLE DE SORTIE ATTENDUE :
+
+## 1. Page de connexion
+**URL suggérée** : /login
+**Objectif** : Authentifier l'utilisateur avant accès à l'application
+**Composants UI** : logo centré, formulaire (2 champs), bouton "Se connecter",
+                    lien "Mot de passe oublié"
+**Données affichées** : message d'erreur si échec
+**Données saisies** : email (texte), mot de passe (masqué)
+**Actions utilisateur** : soumettre le formulaire, cliquer sur lien reset
+**Navigation** : → Dashboard (authentification réussie),
+                 → Réinitialisation mot de passe
+
+RÈGLES STRICTES :
+1. N'invente AUCUNE page absente du CDC — si tu n'es pas sûr, ne l'inclus pas
+2. Si une information est absente du CDC, écris : [Non spécifié]
+3. Sois précis sur les composants : "tableau avec colonnes Nom/Date/Statut" vaut
+   mieux que "un tableau de données"
+4. Si une fonctionnalité est floue, ajoute [À PRÉCISER] et propose 2 interprétations
+
+---
+EXTRAITS DU CAHIER DES CHARGES :
+{context}
+---
+
+LISTE COMPLÈTE DES PAGES/VUES :
+"""
  
  
 # ─────────────────────────────────────────────
@@ -162,8 +213,25 @@ EXPERIMENTS: list[RAGConfig] = [
         prompt_template=PROMPT_V1,
         description="Requêtes formulées en phrases naturelles",
     ),
+    RAGConfig(
+        name="multi_naturel_k5",
+        strategy="multi",
+        queries=QUERIES_MULTI_NATUREL,
+        k=5,
+        prompt_template=PROMPT_V1,
+        description="Requêtes formulées en phrases naturelles",
+    ),
+    
  
     # --- Requêtes courtes ---
+    RAGConfig(
+        name="multi_court_k3",
+        strategy="multi",
+        queries=QUERIES_COURTES,
+        k=3,
+        prompt_template=PROMPT_V1,
+        description="Requêtes très courtes (style mot-clé)",
+    ),
     RAGConfig(
         name="multi_court_k5",
         strategy="multi",
@@ -175,20 +243,93 @@ EXPERIMENTS: list[RAGConfig] = [
  
     # --- Variation prompt ---
     RAGConfig(
-        name="baseline_prompt_v2",
-        strategy="single",
-        queries=[QUERY_ORIGINAL],
-        k=8,
-        prompt_template=PROMPT_V2,
-        description="Prompt structuré avec format Markdown imposé",
-    ),
-    RAGConfig(
         name="baseline_prompt_v3_concis",
         strategy="single",
         queries=[QUERY_ORIGINAL],
         k=8,
         prompt_template=PROMPT_V3_CONCIS,
         description="Prompt minimaliste — teste si la concision aide",
+    ),
+    
+    RAGConfig(
+        name="baseline_single_k8_v4",
+        strategy="single",
+        queries=[QUERY_ORIGINAL],
+        k=8,
+        prompt_template=PROMPT_V4,
+        description="Config actuelle de cr_agent.py — point de référence",
+    ),
+ 
+    # --- Variation k ---
+    RAGConfig(
+        name="single_k4_v4",
+        strategy="single",
+        queries=[QUERY_ORIGINAL],
+        k=4,
+        prompt_template=PROMPT_V4,
+        description="Même requête, moins de chunks — contexte plus court",
+    ),
+    RAGConfig(
+        name="single_k12_v4",
+        strategy="single",
+        queries=[QUERY_ORIGINAL],
+        k=12,
+        prompt_template=PROMPT_V4,
+        description="Même requête, plus de chunks — contexte plus large",
+    ),
+ 
+    # --- Multi-query thématique ---
+    RAGConfig(
+        name="multi_thematique_k3_v4",
+        strategy="multi",
+        queries=QUERIES_MULTI_THEMATIQUE,
+        k=3,
+        prompt_template=PROMPT_V4,
+        description="4 requêtes thématiques × k=3 — couverture par sujet",
+    ),
+    RAGConfig(
+        name="multi_thematique_k5_v4",
+        strategy="multi",
+        queries=QUERIES_MULTI_THEMATIQUE,
+        k=5,
+        prompt_template=PROMPT_V4,
+        description="4 requêtes thématiques × k=5 — plus de contexte par sujet",
+    ),
+ 
+    # --- Multi-query phrases naturelles ---
+    RAGConfig(
+        name="multi_naturel_k3_v4",
+        strategy="multi",
+        queries=QUERIES_MULTI_NATUREL,
+        k=3,
+        prompt_template=PROMPT_V4,
+        description="Requêtes formulées en phrases naturelles",
+    ),
+    RAGConfig(
+        name="multi_naturel_k5_v4",
+        strategy="multi",
+        queries=QUERIES_MULTI_NATUREL,
+        k=5,
+        prompt_template=PROMPT_V4,
+        description="Requêtes formulées en phrases naturelles",
+    ),
+ 
+    # --- Requêtes courtes ---
+    RAGConfig(
+        name="multi_court_k3_v4",
+        strategy="multi",
+        queries=QUERIES_COURTES,
+        k=3,
+        prompt_template=PROMPT_V4,
+        description="Requêtes très courtes (style mot-clé)",
+    ),
+    RAGConfig(
+        name="multi_court_k5_v4",
+        strategy="multi",
+        queries=QUERIES_COURTES,
+        k=5,
+        prompt_template=PROMPT_V4,
+        description="Requêtes très courtes (style mot-clé)",
     ),
 ]
  

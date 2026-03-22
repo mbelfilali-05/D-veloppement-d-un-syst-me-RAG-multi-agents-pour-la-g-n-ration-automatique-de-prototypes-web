@@ -144,5 +144,8 @@ class CRAgent(BaseAgent):
             return {
                 **state,
                 "summary": "",
+                "status": "error",          # <-- signal explicite pour le graph, Tu catches toutes les exceptions et retournes un summary vide — 
+                #c'est bien, le workflow ne crashe pas. Mais le CoderAgent va recevoir summary="" et probablement générer du HTML vide ou planter silencieusement.
+                #Et dans graph/workflow.py, tu pourras router différemment si state["status"] == "error" au lieu de continuer vers le CoderAgent avec un contexte vide.
                 "errors": state.get("errors", []) + [error_msg]
             }

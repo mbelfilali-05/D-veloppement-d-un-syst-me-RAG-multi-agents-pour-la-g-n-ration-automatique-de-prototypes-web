@@ -61,7 +61,15 @@ class PDFLoader:
         print(f"✂️  Découpage : {len(raw_chunks)} chunks "
               f"(taille={self.chunk_size}, overlap={self.chunk_overlap})")
 
-            # Filtre les chunks trop courts (parasites sémantiques)
+        # Ajoute chunk_index par page pour permettre la déduplication multi-query
+        page_counters: dict = {}
+        for chunk in raw_chunks:
+            p = chunk.metadata.get("page", 0)
+            page_counters[p] = page_counters.get(p, 0)
+            chunk.metadata["chunk_index"] = page_counters[p]
+            page_counters[p] += 1
+
+        # Filtre les chunks trop courts (parasites sémantiques)
         MIN_CHUNK_SIZE = 100  # caractères
         chunks = [c for c in raw_chunks if len(c.page_content.strip()) >= MIN_CHUNK_SIZE]
         print(f"✂️  Après filtrage : {len(chunks)} chunks valides")

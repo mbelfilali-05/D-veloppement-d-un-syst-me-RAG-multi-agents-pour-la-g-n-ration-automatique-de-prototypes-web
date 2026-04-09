@@ -34,6 +34,13 @@ EXTRAITS DU CAHIER DES CHARGES :
 DESCRIPTION STRUCTURÉE DES PAGES/VUES :
 """
 
+#apres experimentation, j'ai trouvé la strategie la plus adapté est:
+#muli-thematique k=5 avec prompt v_1
+QUERIES_MULTI_THEMATIQUE = [
+    "Pages principales et écrans de l'application web",
+    "Formulaires de saisie et interactions utilisateur",
+    "Tableaux de bord, listes et affichage de données",
+    "Navigation, menus et structure de l'application",]
 
 class CRAgent(BaseAgent):
     """
@@ -43,15 +50,15 @@ class CRAgent(BaseAgent):
     """
 
     def __init__(self, vector_store: VectorStore,
-                 retrieval_k: int = 4,
-                 retrieval_query: str = None,
+                 retrieval_k: int = 5,
+                 retrieval_query: str | list[str] = QUERIES_MULTI_THEMATIQUE,
                  prompt_template: str = PROMPT_TEMPLATE
                 ):
         """
         Args:
             vector_store: Instance VectorStore déjà chargée avec le PDF
             retrieval_k: nombre de chunks à récupérer
-            retrieval_query: requête à utiliser pour le retrieval (si None, utilise une requête par défaut)
+            retrieval_query: requête unique (str) ou liste de requêtes thématiques (list[str])
             prompt_template: template du prompt (peut être modifié)
         """
         self.vector_store = vector_store
@@ -93,25 +100,33 @@ class CRAgent(BaseAgent):
         try:
             retriever = self.vector_store.get_retriever(k=self.retrieval_k)
 
-            # On interroge sur les pages et fonctionnalités du projet
-            # query = (
-            #     "Quelles sont toutes les pages, vues, écrans et fonctionnalités "
-            #     "de l'application web décrite dans ce cahier des charges ? "
-            #     "Quels sont les composants d'interface, les formulaires, "
-            #     "les tableaux de bord et les interactions utilisateur ?"
-            # )
+            queries = self.retrieval_query if isinstance(self.retrieval_query, list) else [self.retrieval_query]
 
-            docs = retriever.invoke(self.retrieval_query)
+            if len(queries) == 1:
+                # Stratégie single : une seule requête
+                docs = retriever.invoke(queries[0])
+            else:
+                # Stratégie multi : N requêtes avec déduplication par (page, chunk_index)
+                seen: dict = {}
+                for query in queries:
+                    for doc in retriever.invoke(query):
+                        key = (
+                            doc.metadata.get("page", 0),
+                            doc.metadata.get("chunk_index", 0),
+                        )
+                        if key not in seen:
+                            seen[key] = doc
+                docs = list(seen.values())
 
             if not docs:
                 raise ValueError("Aucun document récupéré depuis ChromaDB.")
 
-            # 🔽 TRI CHRONOLOGIQUE : par page d'abord, puis par index global
+            # Tri chronologique : par page d'abord, puis par chunk_index
             docs_sorted = sorted(
-                docs, 
+                docs,
                 key=lambda d: (
-                    d.metadata.get("page", 0),           # d'abord par page
-                    d.metadata.get("chunk_index", 0)      # ensuite par index (si disponible)
+                    d.metadata.get("page", 0),
+                    d.metadata.get("chunk_index", 0),
                 )
             )
 

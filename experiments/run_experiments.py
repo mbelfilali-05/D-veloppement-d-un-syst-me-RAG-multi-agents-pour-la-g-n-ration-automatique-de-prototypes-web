@@ -151,16 +151,15 @@ def run_single_experiment(
         print(f"  ✔ Summary généré — {len(summary.split())} mots  "
               f"({duration:.1f}s)")
 
-        cb = tracker._cb   # callback OpenAI avec les compteurs de tokens
         return ExperimentResult(
             config_name=config.name,
             config=config,
             summary=summary,
             chunks=chunk_infos,
             context=context,           # ← stocké pour l'évaluateur LLM
-            tokens_prompt=cb.prompt_tokens,
-            tokens_completion=cb.completion_tokens,
-            tokens_total=cb.total_tokens,
+            tokens_prompt=tracker.prompt_tokens,
+            tokens_completion=tracker.completion_tokens,
+            tokens_total=tracker.total_tokens,
             duration_seconds=duration,
         )
 

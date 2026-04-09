@@ -17,13 +17,13 @@ ALL_RESULTS  = RESULTS_DIR / "all_results.json"
 EVALUATIONS  = RESULTS_DIR / "evaluations.json"
 DEFAULT_OUT  = RESULTS_DIR / "report.html"
  
-CRITERIA = ["couverture", "structure", "precision", "completude_ui", "absence_invention"]
+CRITERIA = ["couverture", "structure", "precision", "fidelite", "exploitabilite"]
 CRITERIA_LABELS = {
     "couverture":        "Couverture",
     "structure":         "Structure",
     "precision":         "Précision",
-    "completude_ui":     "Complétude UI",
-    "absence_invention": "Sans invention",
+    "fidelite":          "Fidélité",
+    "exploitabilite":    "Exploitabilité",
 }
  
  

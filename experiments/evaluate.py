@@ -13,6 +13,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 from core.llm_config import get_llm
+from core.pdf_loader import PDFLoader
 from experiments.models import ExperimentResult
 
 
@@ -24,18 +25,18 @@ EVAL_OUTPUT = RESULTS_DIR / "evaluations.json"
 #  CRITÈRES — alignés avec le prompt ci-dessous
 # ─────────────────────────────────────────────
 
-CRITERIA = ["couverture", "structure", "precision_ui", "fidelite", "exploitabilite"]
+CRITERIA = ["couverture", "structure", "precision", "fidelite", "exploitabilite"]
 CRITERIA_LABELS = {
     "couverture":     "Couverture",
     "structure":      "Structure",
-    "precision_ui":   "Précision UI",
+    "precision":      "Précision",
     "fidelite":       "Fidélité",
     "exploitabilite": "Exploitabilité",
 }
 WEIGHTS = {
     "couverture":     0.25,
     "structure":      0.15,
-    "precision_ui":   0.30,
+    "precision":      0.30,
     "fidelite":       0.20,
     "exploitabilite": 0.10,
 }
@@ -83,7 +84,7 @@ RUBRIQUES DE SCORING :
    4 = format cohérent sur toutes les pages, quelques lacunes mineures
    5 = format parfaitement cohérent, immédiatement parsable
 
-3. precision_ui — Les composants UI sont-ils décrits avec assez de détail pour générer du code ?
+3. precision — Les composants UI sont-ils décrits avec assez de détail pour générer du code ?
    1 = composants absents ou trop vagues ("interface utilisateur")
    2 = composants nommés mais sans détail ("un formulaire")
    3 = composants décrits avec type mais sans données ("formulaire de connexion")
@@ -107,7 +108,7 @@ RUBRIQUES DE SCORING :
 PONDÉRATION pour le score global :
 - couverture      : 25%
 - structure       : 15%
-- precision_ui    : 30%
+- precision    : 30%
 - fidelite        : 20%
 - exploitabilite  : 10%
 
@@ -117,7 +118,7 @@ Aucun markdown, aucun texte avant ou après, aucune balise ```.
 {{
   "couverture":       {{"score": <1-5>, "justification": "<exemple factuel>"}},
   "structure":        {{"score": <1-5>, "justification": "<exemple factuel>"}},
-  "precision_ui":     {{"score": <1-5>, "justification": "<exemple factuel>"}},
+  "precision":     {{"score": <1-5>, "justification": "<exemple factuel>"}},
   "fidelite":         {{"score": <1-5>, "justification": "<exemple factuel>"}},
   "exploitabilite":   {{"score": <1-5>, "justification": "<exemple factuel>"}},
   "score_global":     <score pondéré arrondi à 1 décimale>,
@@ -132,10 +133,16 @@ Aucun markdown, aucun texte avant ou après, aucune balise ```.
 #  CŒUR : évaluation d'un résultat
 # ─────────────────────────────────────────────
 
-def evaluate_result(result: ExperimentResult, chain) -> dict:
+def evaluate_result(result: ExperimentResult, chain, full_doc_text: str = "") -> dict:
     """
     Soumet le context + summary au LLM juge.
     Retourne un dict avec les scores et justifications.
+
+    Args:
+        result: résultat d'expérience à évaluer
+        chain: chain LCEL (prompt | llm | parser)
+        full_doc_text: texte complet du PDF (source de vérité).
+                       Si vide, utilise result.context (chunks RAG) comme fallback.
     """
     if result.error or not result.summary:
         return {
@@ -144,22 +151,28 @@ def evaluate_result(result: ExperimentResult, chain) -> dict:
             "reason": result.error or "summary vide",
         }
 
-    if not result.context:
+    # Source de vérité : document complet si disponible, sinon chunks RAG avec avertissement
+    ground_truth = full_doc_text if full_doc_text else result.context
+    if not ground_truth:
         return {
             "config_name": result.config_name,
             "skipped": True,
             "reason": (
-                "context RAG manquant — relance run_experiments.py "
-                "pour regénérer les résultats avec le context stocké"
+                "Aucun texte de référence disponible — passe --pdf <fichier.pdf> "
+                "ou relance run_experiments.py pour regénérer les résultats avec le context stocké"
             ),
         }
+
+    if not full_doc_text and result.context:
+        print(f"  ⚠️  '{result.config_name}' : évaluation sur chunks RAG (pas le PDF complet). "
+              "Passe --pdf pour une évaluation précise.")
 
     print(f"  ⚖️  Évaluation de '{result.config_name}'...")
     raw = ""
 
     try:
         raw = chain.invoke({
-            "context": result.context,   # CDC original (chunks RAG)
+            "context": ground_truth,     # CDC complet (ou chunks RAG en fallback)
             "summary": result.summary,   # résumé généré à évaluer
         })
 
@@ -270,6 +283,10 @@ def main():
         metavar="NOM",
         help="N'évalue que ces configs (par nom)"
     )
+    parser.add_argument(
+        "--pdf", default=None,
+        help="Chemin vers le PDF original (source de vérité complète pour l'évaluation)"
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -288,12 +305,31 @@ def main():
         print("❌ Aucun résultat à évaluer.")
         return
 
+    # Charge le texte complet du PDF comme source de vérité pour l'évaluation
+    full_doc_text = ""
+    if args.pdf:
+        pdf_path = Path(args.pdf)
+        if not pdf_path.exists():
+            print(f"❌ PDF introuvable : {pdf_path}")
+            return
+        print(f"\n📄 Chargement du PDF complet comme référence : {pdf_path.name}")
+        loader = PDFLoader()
+        chunks = loader.load(str(pdf_path))
+        full_doc_text = "\n\n---\n\n".join(
+            f"[Page {c.metadata.get('page', '?')}]\n{c.page_content}"
+            for c in chunks
+        )
+        print(f"   {len(chunks)} chunks chargés comme source de vérité\n")
+    else:
+        print("\n⚠️  Aucun --pdf fourni : l'évaluation utilisera les chunks RAG comme référence.")
+        print("   Pour une évaluation précise, relance avec : --pdf <chemin_vers_le_pdf>\n")
+
     llm    = get_llm(temperature=0.0)
     prompt = ChatPromptTemplate.from_template(EVAL_PROMPT)
     chain  = prompt | llm | StrOutputParser()
 
     print(f"\n⚖️  Évaluation de {len(results)} résultat(s)...\n")
-    evaluations = [evaluate_result(r, chain) for r in results]
+    evaluations = [evaluate_result(r, chain, full_doc_text=full_doc_text) for r in results]
 
     RESULTS_DIR.mkdir(exist_ok=True)
     with open(EVAL_OUTPUT, "w", encoding="utf-8") as f:

@@ -1,6 +1,5 @@
 # agents/executor_agent.py
 
-import re
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
@@ -8,19 +7,31 @@ from agents.base_agent import BaseAgent
 
 
 REPAIR_PROMPT = """
-Tu es un expert HTML/CSS. Le code HTML suivant contient des erreurs ou est incomplet.
-Répare-le pour qu'il soit valide, complet et fonctionnel.
+Tu es un expert front-end. Le code HTML suivant contient des erreurs structurelles
+ou est incomplet. Répare-le en préservant EXACTEMENT son intention et sa stack technique.
 
-Règles :
-- Le fichier doit commencer par <!DOCTYPE html> et se terminer par </html>
-- Tout le CSS et JS doit être inline (pas de fichiers externes sauf CDN)
-- La navigation entre les vues doit fonctionner
-- Ne supprime aucune vue, répare seulement les erreurs
+STACK TECHNIQUE UTILISÉE — À PRÉSERVER ABSOLUMENT :
+• Tailwind CSS via CDN (cdn.tailwindcss.com)
+• Flowbite (flowbite.min.css et flowbite.min.js)
+• Alpine.js (x-data, x-show, @click, :class) pour toute la navigation et l'interactivité
+• Google Fonts Inter
+• Une seule vue visible à la fois via x-show="currentView === 'nom_vue'"
+
+RÈGLES DE RÉPARATION :
+1. Le fichier DOIT commencer par <!DOCTYPE html> et se terminer par </html>
+2. Les balises <html>, <head>, <body> doivent être présentes et bien fermées
+3. NE PAS remplacer Alpine.js par du JS vanilla — garder @click, x-show, x-data
+4. NE PAS modifier les classes Tailwind existantes
+5. NE PAS ajouter class="view" sur les divs de vue (x-show gère seul la visibilité)
+6. NE PAS supprimer de vues — toutes doivent rester présentes
+7. Si une balise est ouverte mais pas fermée, la fermer au bon endroit
+8. Si le <head> manque des CDN, les ajouter (Tailwind, Flowbite, Alpine, Inter)
 
 CODE HTML À RÉPARER :
 {html_code}
 
 Génère UNIQUEMENT le HTML corrigé, sans explication ni balises markdown.
+Commence par <!DOCTYPE html> et termine par </html>.
 """
 
 
@@ -35,8 +46,7 @@ class ExecutorAgent(BaseAgent):
        via st.components.v1.html()
     """
 
-    # Hauteur par défaut de l'iframe Streamlit (px)
-    DEFAULT_HEIGHT = 800
+    DEFAULT_HEIGHT = 900
 
     def __init__(self):
         super().__init__(name="ExecutorAgent", temperature=0.0)
@@ -78,7 +88,6 @@ class ExecutorAgent(BaseAgent):
 
             html_code = self._repair(html_code)
 
-            # Revalide après réparation
             remaining = self._validate(html_code)
             if remaining:
                 self._log(f"⚠️  Problèmes résiduels après réparation : {remaining}")
@@ -88,7 +97,6 @@ class ExecutorAgent(BaseAgent):
             self._log("✅ HTML valide, aucune réparation nécessaire")
 
         # --- Étape 2 : Injection du script de resize automatique ---
-        # Permet à Streamlit d'ajuster la hauteur de l'iframe dynamiquement
         html_code = self._inject_resize_script(html_code)
 
         # --- Étape 3 : Calcul de la hauteur de rendu ---
@@ -112,27 +120,35 @@ class ExecutorAgent(BaseAgent):
         """
         Vérifie les problèmes structurels basiques.
         Retourne une liste de problèmes (vide = HTML valide).
+
+        Détecte à la fois JS vanilla (onclick, addEventListener) et Alpine.js
+        (@click, x-show, x-data) pour ne pas déclencher de réparation inutile
+        sur du HTML parfaitement valide utilisant Alpine.
         """
         issues = []
+        html_lower = html.lower()
 
         if not html.strip().lower().startswith("<!doctype html"):
             issues.append("Manque <!DOCTYPE html>")
 
-        if "<html" not in html.lower():
+        if "<html" not in html_lower:
             issues.append("Manque balise <html>")
 
-        if "</html>" not in html.lower():
-            issues.append("Manque balise </html>")
+        if "</html>" not in html_lower:
+            issues.append("Manque balise </html> (HTML potentiellement tronqué)")
 
-        if "<body" not in html.lower():
+        if "<body" not in html_lower:
             issues.append("Manque balise <body>")
 
-        if "<head" not in html.lower():
+        if "<head" not in html_lower:
             issues.append("Manque balise <head>")
 
-        # Vérifie que la navigation JS est présente
-        if "onclick" not in html and "addEventListener" not in html:
-            issues.append("Aucune interaction JS détectée (navigation peut être absente)")
+        # Détection d'interactivité : JS vanilla OU Alpine.js
+        has_vanilla_js = "onclick" in html_lower or "addeventlistener" in html_lower
+        has_alpine_js  = "@click" in html or "x-show" in html or "x-data" in html
+
+        if not has_vanilla_js and not has_alpine_js:
+            issues.append("Aucune interaction JS détectée (ni vanilla ni Alpine.js)")
 
         return issues
 
@@ -142,7 +158,6 @@ class ExecutorAgent(BaseAgent):
             repaired = self.chain.invoke({"html_code": html})
             repaired = repaired.strip()
 
-            # Nettoyage des balises markdown éventuelles
             if repaired.startswith("```"):
                 lines = repaired.split("\n")
                 repaired = "\n".join(lines[1:])
@@ -152,7 +167,7 @@ class ExecutorAgent(BaseAgent):
             return repaired
         except Exception as e:
             self._log(f"❌ Réparation échouée : {e}")
-            return html  # Retourne l'original si la réparation plante
+            return html
 
     def _inject_resize_script(self, html: str) -> str:
         """
@@ -161,18 +176,15 @@ class ExecutorAgent(BaseAgent):
         """
         resize_script = """
 <script>
-  // Communique la hauteur réelle au parent Streamlit
   function notifyHeight() {
     const height = document.body.scrollHeight;
     window.parent.postMessage({ type: 'streamlit:setFrameHeight', height: height }, '*');
   }
   window.addEventListener('load', notifyHeight);
   window.addEventListener('resize', notifyHeight);
-  // Re-notifie après les transitions de navigation
   document.addEventListener('click', () => setTimeout(notifyHeight, 300));
 </script>
 """
-        # Insère juste avant </body>
         if "</body>" in html:
             return html.replace("</body>", resize_script + "\n</body>")
         else:
@@ -180,17 +192,19 @@ class ExecutorAgent(BaseAgent):
 
     def _estimate_height(self, html: str) -> int:
         """
-        Estime une hauteur de rendu raisonnable basée sur la taille du HTML.
-        Streamlit utilisera cette valeur comme hauteur initiale de l'iframe.
+        Estime une hauteur de rendu raisonnable pour Streamlit.
+        Avec Tailwind + Flowbite, les vues sont denses — les paliers sont
+        ajustés à la hausse par rapport à l'heuristique initiale.
         """
-        # Heuristique simple : plus le HTML est riche, plus la hauteur est grande
         line_count = html.count("\n")
 
         if line_count < 100:
-            return 600
+            return 700
         elif line_count < 300:
-            return 800
-        elif line_count < 600:
             return 900
+        elif line_count < 600:
+            return 1100
+        elif line_count < 1000:
+            return 1300
         else:
-            return 1000
+            return 1500

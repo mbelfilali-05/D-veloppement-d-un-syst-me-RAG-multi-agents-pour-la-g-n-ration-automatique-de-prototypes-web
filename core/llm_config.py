@@ -9,14 +9,15 @@ from langchain_openai import OpenAIEmbeddings
 load_dotenv()
 
 
-def get_llm(temperature: float = None) -> ChatOpenAI:
+def get_llm(temperature: float = None, model: str = None) -> ChatOpenAI:
     """
     Retourne une instance configurée du LLM.
     
     Args:
         temperature: Si None, utilise la valeur du .env
                      Sinon, utilise la valeur fournie.
-                     
+        model: Si None, utilise la valeur du .env
+               Sinon, utilise la valeur fournie.
     Returns:
         ChatOpenAI: Instance prête à utiliser
     """
@@ -25,8 +26,9 @@ def get_llm(temperature: float = None) -> ChatOpenAI:
     )
     
     #gpt-4o-mini est plus rapide et moins cher que gpt-4, idéal pour les tests et l'évaluation, et parfais pour generer des resumes de cahier des charges. Pour une analyse plus approfondie ou des résumés plus longs, gpt-4 peut être préféré.
+    selected_model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     return ChatOpenAI(
-        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        model=selected_model,
         temperature=temp,
         api_key=os.getenv("OPENAI_API_KEY")
     )

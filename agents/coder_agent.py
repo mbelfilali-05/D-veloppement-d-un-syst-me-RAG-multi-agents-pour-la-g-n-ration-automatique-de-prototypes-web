@@ -293,6 +293,9 @@ DENSITÉ ET QUALITÉ (non négociables)
 • Commentaire HTML <!-- Vue: NomVue --> avant chaque section de vue
 • Visibilité uniquement via x-show — JAMAIS class="hidden" ou .view CSS
 
+
+{feedback_section}
+
 ═══════════════════════════════════════════════════════════════
 RAPPEL FINAL — LES 3 RÈGLES CRITIQUES
 ═══════════════════════════════════════════════════════════════
@@ -318,22 +321,53 @@ DESCRIPTION DES PAGES/VUES :
 Génère UNIQUEMENT le code HTML complet, sans explication, sans balises markdown.
 Commence directement par <!DOCTYPE html> et termine par </html>.
 """
- 
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Template de la section feedback (injectée au retry uniquement)
+# ═══════════════════════════════════════════════════════════════
+
+FEEDBACK_SECTION_TEMPLATE = """
+═══════════════════════════════════════════════════════════════
+🚨 CORRECTIONS PRIORITAIRES — version {iteration} (précédente version jugée insuffisante)
+═══════════════════════════════════════════════════════════════
+
+Score précédent : {score}/5 — {verdict_label}
+
+Scores par critère :
+{criteria_summary}
+
+ISSUES À CORRIGER EN PRIORITÉ (par ordre de sévérité) :
+{issues_list}
+
+VUES MANQUANTES dans la version précédente :
+{missing_views}
+
+TU DOIS :
+1. Corriger CHAQUE issue listée ci-dessus dans ta nouvelle version
+2. Ajouter les vues manquantes si elles sont dans le summary
+3. Préserver les points forts identifiés : {strengths}
+4. Ne PAS régresser sur les critères déjà notés ≥ 4
+
+Traite ces corrections comme des exigences strictes, pas des suggestions.
+"""
+
 
 class CoderAgent(BaseAgent):
     """
     Agent de génération de code.
     Transforme la description structurée du CRAgent
     en un prototype HTML multi-vues navigable.
+
+    Depuis l'Axe 2 : peut recevoir un feedback du ReviewerAgent
+    pour produire une version corrective (retry du cycle).
     """
 
     def __init__(self):
-        super().__init__(name="CoderAgent", temperature=0.2, model="gpt-4o")
-        # temperature=0.2 : légèrement créatif pour le rendu visuel,
-        # mais toujours structuré
+        super().__init__(name="CoderAgent", temperature=0.2,model="gpt-4o")
 
     def _build_chain(self):
-        """Chain LCEL : prompt → LLM → texte brut (le HTML)"""
+        """Chain LCEL : prompt → LLM → HTML brut"""
         prompt = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
         return prompt | self.llm | StrOutputParser()
 
@@ -341,15 +375,25 @@ class CoderAgent(BaseAgent):
         """
         Génère le prototype HTML depuis le résumé du CRAgent.
 
+        Si state contient 'review_feedback' (retry du cycle), la section
+        feedback est injectée dans le prompt pour guider les corrections.
+
         Args:
             state: AgentState — doit contenir 'summary'
+                   Optionnel : 'review_feedback' (pour un retry corrigé)
 
         Returns:
-            dict: AgentState avec 'html_code' mis à jour
+            dict: AgentState avec 'html_code' mis à jour,
+                  et 'iteration' incrémenté.
         """
-        self._log("Génération du prototype HTML en cours...")
-
         summary = state.get("summary", "")
+        review_feedback = state.get("review_feedback")
+        iteration = state.get("iteration", 0) + 1
+
+        if review_feedback:
+            self._log(f"Génération corrective (itération {iteration})...")
+        else:
+            self._log(f"Génération initiale du prototype HTML...")
 
         if not summary:
             error_msg = "CoderAgent : 'summary' vide, impossible de générer le HTML."
@@ -357,20 +401,30 @@ class CoderAgent(BaseAgent):
             return {
                 **state,
                 "html_code": "",
+                "iteration": iteration,
                 "errors": state.get("errors", []) + [error_msg]
             }
 
-        try:
-            html_code = self.chain.invoke({"summary": summary})
+        # Construction de la section feedback (vide si premier passage)
+        feedback_section = self._build_feedback_section(review_feedback, iteration)
 
-            # Nettoyage : retire les éventuels backticks markdown si le LLM en ajoute
+        try:
+            html_code = self.chain.invoke({
+                "summary":          summary,
+                "feedback_section": feedback_section,
+            })
             html_code = self._clean_html(html_code)
 
-            self._log(f"✅ HTML généré ({len(html_code)} caractères)")
+            # Détection de troncature
+            if "</html>" not in html_code.lower():
+                self._log("⚠️  HTML potentiellement tronqué — </html> absent")
+
+            self._log(f"✅ HTML généré ({len(html_code)} caractères / {html_code.count(chr(10))} lignes)")
 
             return {
                 **state,
                 "html_code": html_code,
+                "iteration": iteration,
                 "errors": state.get("errors", [])
             }
 
@@ -380,8 +434,68 @@ class CoderAgent(BaseAgent):
             return {
                 **state,
                 "html_code": "",
+                "iteration": iteration,
                 "errors": state.get("errors", []) + [error_msg]
             }
+
+    # ------------------------------------------------------------------ #
+    #  Helpers
+    # ------------------------------------------------------------------ #
+
+    def _build_feedback_section(self, feedback: dict | None, iteration: int) -> str:
+        """
+          Version CLEAN :
+          - Ne garde que les informations actionnables
+          - Supprime le bruit (scores, justifications, commentaire)
+          - Produit un format simple et déterministe pour le LLM
+        """
+        if not feedback or feedback.get("error"):
+            return ""
+
+        issues = feedback.get("issues", [])
+        missing = feedback.get("missing_views", [])
+
+        # Limiter à 3 issues max (priorité high > medium > low)
+        severity_order = {"high": 0, "medium": 1, "low": 2}
+        issues_sorted = sorted(
+            issues,
+            key=lambda i: severity_order.get(i.get("severity", "low"), 3),
+        )[:3]
+
+        if not issues_sorted and not missing:
+            return """
+      MODE CORRECTION :
+      Aucune correction nécessaire.
+      Reproduis exactement le HTML précédent sans modification.
+      """
+
+        issues_lines = []
+        for issue in issues_sorted:
+            issues_lines.append(
+                f"- Vue: {issue.get('vue', '?')}\n"
+                f"  Problème: {issue.get('description', '')}\n"
+                f"  Correction: {issue.get('suggestion', '')}"
+            )
+
+        issues_text = "\n".join(issues_lines) if issues_lines else "Aucune"
+
+        missing_text = ", ".join(missing) if missing else "Aucune"
+
+        return f"""
+        MODE CORRECTION (itération {iteration}) :
+
+        PROBLÈMES À CORRIGER :
+        {issues_text}
+
+        VUES MANQUANTES :
+        {missing_text}
+
+        RÈGLES STRICTES :
+        - Corrige UNIQUEMENT les problèmes ci-dessus
+        - Ne modifie PAS le reste du HTML
+        - Ne supprime PAS de contenu correct
+        - Ne réorganise PAS les layouts corrects
+        """
 
     def _clean_html(self, raw: str) -> str:
         """
@@ -390,7 +504,6 @@ class CoderAgent(BaseAgent):
         """
         raw = raw.strip()
         if raw.startswith("```"):
-            # Retire la première ligne (```html ou ```)
             lines = raw.split("\n")
             raw = "\n".join(lines[1:])
         if raw.endswith("```"):

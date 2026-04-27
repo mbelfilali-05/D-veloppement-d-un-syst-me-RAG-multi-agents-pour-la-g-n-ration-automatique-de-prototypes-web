@@ -1,166 +1,213 @@
 # graph/workflow.py
 #
-# Orchestration LangGraph du pipeline RAG multi-agents — avec cycle de review.
+# Orchestration LangGraph — architecture 6 agents
 #
-# Topologie :
+# Pipeline :
+#   START → analyze → design → shell → views → assemble → review → [retry?] → validate → END
 #
-#   START
-#     │
-#     ▼
-#   analyze_node (CRAgent)
-#     │
-#     ├─ [erreur] ──► END
-#     ▼
-#   generate_node (CoderAgent) ◄──────┐
-#     │                                │
-#     ▼                                │
-#   review_node (ReviewerAgent)       │
-#     │                                │
-#     ├─ [erreur] ──► validate_node ──┤
-#     ├─ [verdict good] ────► validate_node
-#     ├─ [iteration >= max] ► validate_node
-#     └─ [verdict insuffisant + retries disponibles] ─┘  (retour vers generate)
-#     ▼
-#   validate_node (ExecutorAgent)
-#     │
-#     ▼
-#   END
-#
-# L'interface Streamlit peut :
-#  - soit invoquer le graphe entier via run_pipeline()
-#  - soit appeler les étapes individuellement via analyze_pdf(), generate_html(),
-#    review_html(), validate_html() pour permettre l'édition intermédiaire du summary
-#    et le feedback temps réel sur chaque itération du cycle
+# Le retry est CIBLÉ : seules les vues problématiques sont régénérées,
+# pas tout le HTML.
 
-from typing import TypedDict, List, Optional
+from typing import TypedDict, List, Optional, Dict
 from langgraph.graph import StateGraph, END
 
 from core.pdf_loader import PDFLoader
 from core.vector_store import VectorStore
 from agents.cr_agent import CRAgent
-from agents.coder_agent import CoderAgent
+from agents.design_agent import DesignAgent
+from agents.shell_agent import ShellAgent
+from agents.view_agent import ViewAgent
+from agents.assembler import Assembler
 from agents.reviewer_agent import ReviewerAgent
 from agents.executor_agent import ExecutorAgent
 
 
 # ════════════════════════════════════════════════════════════════════
-#  Définition typée de l'AgentState partagé entre les nœuds
+#  AgentState — état partagé entre tous les nœuds
 # ════════════════════════════════════════════════════════════════════
 
 class AgentState(TypedDict, total=False):
-    """État partagé entre tous les nœuds du graphe."""
-    # Champs de base
+    # Pipeline de base
     pdf_path:        str
     summary:         str
-    html_code:       str
-    final_result:    str        # "OK" | "ERROR" | ""
+    final_result:    str
     render_height:   int
-    status:          str        # "error" éventuellement posé par un nœud
+    status:          str
     errors:          List[str]
 
-    # Champs du cycle de review (Axe 2)
-    review_feedback: Optional[dict]   # JSON structuré retourné par ReviewerAgent
-    quality_score:   float             # Score global pondéré (0.0 à 5.0)
-    verdict:         str               # "good" | "insufficient"
-    iteration:       int               # Compteur d'itérations generate ↔ review
-    max_iterations:  int               # Limite supérieure du cycle (défaut 2 retries)
+    # Architecture 6 agents
+    design_config:   Optional[dict]       # JSON du DesignAgent
+    shell_html:      str                  # Shell du ShellAgent
+    views_html:      Dict[str, str]       # {view_id: html} du ViewAgent
+    html_code:       str                  # HTML assemblé final
+
+    # Cycle de review
+    review_feedback: Optional[dict]
+    quality_score:   float
+    verdict:         str
+    iteration:       int
+    max_iterations:  int
 
 
 def initial_state(pdf_path: str = "") -> AgentState:
-    """Retourne un AgentState vierge, avec compteurs du cycle initialisés."""
     return {
         "pdf_path":        pdf_path,
         "summary":         "",
-        "html_code":       "",
         "final_result":    "",
         "render_height":   900,
         "errors":          [],
-        # Cycle de review
+        "design_config":   None,
+        "shell_html":      "",
+        "views_html":      {},
+        "html_code":       "",
         "review_feedback": None,
         "quality_score":   0.0,
         "verdict":         "",
         "iteration":       0,
-        "max_iterations":  2,   # 2 retries max (3 générations au total)
+        "max_iterations":  2,
     }
 
 
 # ════════════════════════════════════════════════════════════════════
 #  Nœuds du graphe
-#  Chaque nœud prend un AgentState et retourne un AgentState modifié.
 # ════════════════════════════════════════════════════════════════════
 
 def analyze_node(state: AgentState) -> AgentState:
-    """
-    Nœud 1 : PDFLoader → VectorStore → CRAgent
-    Remplit state["summary"] à partir de state["pdf_path"].
-    """
+    """Nœud 1 : PDFLoader → VectorStore → CRAgent → summary"""
     pdf_path = state.get("pdf_path", "")
     if not pdf_path:
-        return {
-            **state,
-            "final_result": "ERROR",
-            "errors": state.get("errors", []) + ["pdf_path manquant dans l'état"],
-        }
+        return {**state, "final_result": "ERROR",
+                "errors": state.get("errors", []) + ["pdf_path manquant"]}
 
     loader = PDFLoader()
     chunks = loader.load(pdf_path)
 
-    vector_store = VectorStore()
-    if not vector_store.load():
-        vector_store.create(chunks)
+    vs = VectorStore()
+    if not vs.load():
+        vs.create(chunks)
 
-    cr_agent = CRAgent(vector_store=vector_store)
+    cr_agent = CRAgent(vector_store=vs)
     state = cr_agent.run(state)
 
     if state.get("status") == "error" or not state.get("summary"):
         state["final_result"] = "ERROR"
-
     return state
 
 
-def generate_node(state: AgentState) -> AgentState:
-    """
-    Nœud 2 : CoderAgent
-    Remplit state["html_code"] à partir de state["summary"].
+def design_node(state: AgentState) -> AgentState:
+    """Nœud 2 : DesignAgent → design_config (JSON)"""
+    agent = DesignAgent()
+    return agent.run(state)
 
-    Au premier passage : génération initiale.
-    Au retry (iteration >= 1) : génération corrective avec le feedback
-    du ReviewerAgent injecté dans le prompt.
 
-    Le compteur 'iteration' est incrémenté à chaque passage
-    (géré en interne par CoderAgent.run()).
-    """
-    coder_agent = CoderAgent()
-    state = coder_agent.run(state)
+def shell_node(state: AgentState) -> AgentState:
+    """Nœud 3 : ShellAgent → shell_html"""
+    agent = ShellAgent()
+    return agent.run(state)
 
-    if not state.get("html_code"):
-        state["final_result"] = "ERROR"
 
+def views_node(state: AgentState) -> AgentState:
+    """Nœud 4 : ViewAgent → views_html (dict)"""
+    agent = ViewAgent()
+    state = agent.run(state)
+    state["iteration"] = state.get("iteration", 0) + 1
     return state
+
+
+def assemble_node(state: AgentState) -> AgentState:
+    """Nœud 5 : Assembler → html_code (Python pur)"""
+    assembler = Assembler()
+    return assembler.run(state)
 
 
 def review_node(state: AgentState) -> AgentState:
+    """Nœud 6 : ReviewerAgent → review_feedback + quality_score + verdict"""
+    agent = ReviewerAgent()
+    return agent.run(state)
+
+
+def targeted_retry_node(state: AgentState) -> AgentState:
     """
-    Nœud 3 (NOUVEAU) : ReviewerAgent
-    Évalue state["html_code"] et enrichit l'état avec :
-      - review_feedback (JSON structuré)
-      - quality_score (0.0 à 5.0)
-      - verdict ("good" | "insufficient")
+    Nœud de retry ciblé : ne régénère QUE les vues problématiques
+    identifiées par le ReviewerAgent, puis réassemble.
     """
-    reviewer_agent = ReviewerAgent()
-    state = reviewer_agent.run(state)
+    feedback = state.get("review_feedback", {})
+    design_config = state.get("design_config", {})
+    summary = state.get("summary", "")
+    views_html = dict(state.get("views_html", {}))  # copie
+
+    if not feedback or not design_config:
+        return state
+
+    # Identifier les vues à régénérer
+    views_to_retry = set()
+
+    # 1. Vues manquantes
+    missing = feedback.get("missing_views", [])
+    for mv in missing:
+        views_to_retry.add(mv)
+
+    # 2. Vues avec issues high
+    issues = feedback.get("issues", [])
+    for issue in issues:
+        if issue.get("severity") == "high":
+            vue_name = issue.get("vue", "")
+            if vue_name and vue_name != "global":
+                views_to_retry.add(vue_name)
+
+    # 3. Si aucune vue spécifique identifiée mais score bas,
+    #    régénérer les 2 premières vues (landing + catalog généralement)
+    if not views_to_retry and state.get("quality_score", 0) < 3.5:
+        all_views = design_config.get("views", [])
+        for v in all_views[:2]:
+            views_to_retry.add(v["id"])
+
+    if not views_to_retry:
+        print(f"[targeted_retry] Aucune vue à régénérer identifiée")
+        return state
+
+    print(f"[targeted_retry] 🔄 Régénération ciblée de {len(views_to_retry)} vue(s) : "
+          f"{', '.join(views_to_retry)}")
+
+    # Régénérer chaque vue ciblée
+    view_agent = ViewAgent()
+    all_views = design_config.get("views", [])
+
+    for view_id_or_name in views_to_retry:
+        # Trouver la view_info correspondante
+        view_info = None
+        for v in all_views:
+            if v["id"] == view_id_or_name or v["name"] == view_id_or_name:
+                view_info = v
+                break
+
+        if not view_info:
+            print(f"[targeted_retry]   ⚠️ Vue '{view_id_or_name}' non trouvée dans design_config")
+            continue
+
+        try:
+            new_html = view_agent.generate_single_view(view_info, design_config, summary)
+            views_html[view_info["id"]] = new_html
+            lines = new_html.count("\n") if new_html else 0
+            print(f"[targeted_retry]   ✅ {view_info['name']} régénérée ({lines} lignes)")
+        except Exception as e:
+            print(f"[targeted_retry]   ❌ {view_info['name']} : {e}")
+
+    # Incrémenter l'itération
+    state["iteration"] = state.get("iteration", 0) + 1
+    state["views_html"] = views_html
+
+    # Réassembler
+    assembler = Assembler()
+    state = assembler.run(state)
+
     return state
 
 
 def validate_node(state: AgentState) -> AgentState:
-    """
-    Nœud 4 : ExecutorAgent
-    Valide state["html_code"], injecte le resize script, calcule render_height.
-    Terminus du pipeline.
-    """
-    executor_agent = ExecutorAgent()
-    state = executor_agent.run(state)
-    return state
+    """Nœud final : ExecutorAgent → validation + resize"""
+    agent = ExecutorAgent()
+    return agent.run(state)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -168,125 +215,91 @@ def validate_node(state: AgentState) -> AgentState:
 # ════════════════════════════════════════════════════════════════════
 
 def route_after_analyze(state: AgentState) -> str:
-    """Après analyze : continue vers generate, ou END si erreur."""
     if state.get("final_result") == "ERROR":
         return "end"
-    return "generate"
+    return "design"
 
 
-def route_after_generate(state: AgentState) -> str:
-    """Après generate : continue vers review, ou END si erreur critique."""
-    if state.get("final_result") == "ERROR":
+def route_after_design(state: AgentState) -> str:
+    if not state.get("design_config"):
         return "end"
-    return "review"
+    return "shell"
 
 
 def route_after_review(state: AgentState) -> str:
     """
-    Après review : décide si on retry (generate) ou si on valide (validate).
-
-    Conditions de sortie du cycle (passage à validate) :
-      - verdict == "good" (qualité suffisante atteinte)
-      - iteration >= max_iterations (budget de retries épuisé)
-      - erreur lors du review (le feedback est inutilisable)
-
-    Sinon : retour vers generate avec le feedback pour un retry corrigé.
+    Après review : retry ciblé ou validation finale.
     """
     verdict = state.get("verdict", "insufficient")
     iteration = state.get("iteration", 0)
     max_iter = state.get("max_iterations", 2)
 
-    # Sortie : qualité atteinte
     if verdict == "good":
-        print(f"[workflow] ✅ Verdict 'good' atteint à l'itération {iteration} "
-              f"(score {state.get('quality_score', 0)}/5) — passage à validate")
+        print(f"[workflow] ✅ Verdict 'good' (score {state.get('quality_score', 0)}/5) "
+              f"— passage à validate")
         return "validate"
 
-    # Sortie : budget de retries épuisé
-    # NB : iteration est incrémenté APRÈS generate_node, donc si iteration == max_iter+1
-    # ça signifie qu'on a fait max_iter+1 générations au total (1 initiale + max_iter retries)
     if iteration > max_iter:
-        print(f"[workflow] ⏹️  Budget de retries épuisé ({iteration - 1} retries effectués) "
-              f"— score final {state.get('quality_score', 0)}/5 — passage à validate")
+        print(f"[workflow] ⏹️  Budget épuisé ({iteration - 1} retries) "
+              f"— score {state.get('quality_score', 0)}/5 — passage à validate")
         return "validate"
 
-    # Retry : qualité insuffisante, budget disponible
-    retries_left = max_iter - (iteration - 1)
-    print(f"[workflow] 🔄 Verdict 'insufficient' (score {state.get('quality_score', 0)}/5) "
-          f"— retry {iteration} ({retries_left} restant{'s' if retries_left > 1 else ''})")
-    return "generate"
+    print(f"[workflow] 🔄 Retry ciblé (score {state.get('quality_score', 0)}/5, "
+          f"itération {iteration})")
+    return "retry"
 
 
 # ════════════════════════════════════════════════════════════════════
-#  Construction du StateGraph LangGraph
+#  Construction du graphe
 # ════════════════════════════════════════════════════════════════════
 
 def build_graph():
     """
-    Construit et compile le StateGraph complet avec le cycle de review.
+    Construit le StateGraph avec les 6 agents + retry ciblé.
 
-    Topologie :
-        START
-          │
-          ▼
-        analyze ─[erreur]──► END
-          │
-          ▼
-        generate ◄──────────┐
-          │                 │
-          ▼                 │ retry (si verdict=insufficient et budget dispo)
-        review ─────────────┤
-          │                 │
-          ├─[good]──────────► validate ─► END
-          └─[max iter]──────►
+    START → analyze → design → shell → views → assemble → review
+                                                            │
+                                                  ┌────────┤
+                                                  ▼        │
+                                              [verdict?]   │
+                                                  │        │
+                                      good/max ──►validate │
+                                                  │        │
+                                      insufficient ──► targeted_retry ──► review
     """
     graph = StateGraph(AgentState)
 
-    # Ajout des nœuds
-    graph.add_node("analyze",  analyze_node)
-    graph.add_node("generate", generate_node)
-    graph.add_node("review",   review_node)      # NOUVEAU
-    graph.add_node("validate", validate_node)
+    graph.add_node("analyze",   analyze_node)
+    graph.add_node("design",    design_node)
+    graph.add_node("shell",     shell_node)
+    graph.add_node("views",     views_node)
+    graph.add_node("assemble",  assemble_node)
+    graph.add_node("review",    review_node)
+    graph.add_node("retry",     targeted_retry_node)
+    graph.add_node("validate",  validate_node)
 
-    # Point d'entrée
     graph.set_entry_point("analyze")
 
-    # Routage conditionnel après analyze
-    graph.add_conditional_edges(
-        "analyze",
-        route_after_analyze,
-        {"generate": "generate", "end": END},
-    )
+    graph.add_conditional_edges("analyze", route_after_analyze,
+                                {"design": "design", "end": END})
+    graph.add_conditional_edges("design", route_after_design,
+                                {"shell": "shell", "end": END})
+    graph.add_edge("shell", "views")
+    graph.add_edge("views", "assemble")
+    graph.add_edge("assemble", "review")
 
-    # Routage conditionnel après generate
-    graph.add_conditional_edges(
-        "generate",
-        route_after_generate,
-        {"review": "review", "end": END},
-    )
+    graph.add_conditional_edges("review", route_after_review,
+                                {"validate": "validate", "retry": "retry"})
 
-    # Routage conditionnel après review (c'est ici le cycle)
-    graph.add_conditional_edges(
-        "review",
-        route_after_review,
-        {
-            "generate": "generate",   # retry (cycle)
-            "validate": "validate",   # sortie (qualité OK ou budget épuisé)
-        },
-    )
-
-    # validate est toujours terminal
+    graph.add_edge("retry", "review")  # après retry → re-review
     graph.add_edge("validate", END)
 
     return graph.compile()
 
 
-# Instance compilée réutilisable (évite de reconstruire à chaque appel)
 _compiled_graph = None
 
-
 def get_graph():
-    """Retourne le graphe compilé (lazy init)."""
     global _compiled_graph
     if _compiled_graph is None:
         _compiled_graph = build_graph()
@@ -294,133 +307,104 @@ def get_graph():
 
 
 # ════════════════════════════════════════════════════════════════════
-#  API 1 — Pipeline complet via LangGraph (pour tests CLI)
+#  API 1 — Pipeline complet
 # ════════════════════════════════════════════════════════════════════
 
 def run_pipeline(pdf_path: str, max_iterations: int = 2) -> dict:
-    """
-    Exécute le pipeline complet via le StateGraph LangGraph.
-    Utilisé pour les tests en ligne de commande.
-
-    Args:
-        pdf_path: Chemin vers le PDF du cahier des charges
-        max_iterations: Nombre maximum de retries du cycle (défaut 2)
-    """
     graph = get_graph()
     state = initial_state(pdf_path)
     state["max_iterations"] = max_iterations
-    final_state = graph.invoke(state)
-    return final_state
+    return graph.invoke(state)
 
 
 # ════════════════════════════════════════════════════════════════════
-#  API 2 — Étapes individuelles (pour Streamlit avec feedback temps réel)
-#
-#  Ces fonctions réutilisent les MÊMES fonctions de nœud que le graphe.
-#  Aucune duplication de logique — elles sont juste des façades qui
-#  permettent à l'interface d'appeler chaque étape séparément
-#  pour afficher le feedback en temps réel entre chaque itération.
+#  API 2 — Étapes individuelles (pour Streamlit)
 # ════════════════════════════════════════════════════════════════════
 
 def analyze_pdf(pdf_path: str) -> dict:
-    """Étape 1 isolée — analyse du CDC."""
     return analyze_node(initial_state(pdf_path))
-
-
-def generate_html(summary: str, state: dict = None) -> dict:
-    """
-    Étape 2 isolée — génération HTML.
-    Si state contient 'review_feedback', c'est une génération corrective.
-    """
-    if state is None:
-        state = initial_state()
-    state = {**state, "summary": summary, "html_code": "", "errors": []}
-    return generate_node(state)
-
-
-def review_html(state: dict) -> dict:
-    """
-    Étape 3 isolée — review du HTML.
-    Requiert state avec 'html_code' et 'summary' non vides.
-    """
-    return review_node(state)
-
-
-def validate_html(html_code: str, state: dict = None) -> dict:
-    """Étape 4 isolée — validation et préparation."""
-    if state is None:
-        state = initial_state()
-    state = {**state, "html_code": html_code}
-    return validate_node(state)
 
 
 def run_generation_with_review(
     summary: str,
     state: dict = None,
     max_iterations: int = 2,
-    on_iteration_callback = None,
+    on_step_callback=None,
 ) -> dict:
     """
-    Exécute le cycle generate → review → (retry ou sortie) sans invoquer
-    tout le graphe LangGraph. Utile pour Streamlit qui veut afficher
-    chaque itération en temps réel via st.status.
+    Exécute design → shell → views → assemble → review → [retry] → validate
+    avec callback pour feedback temps réel Streamlit.
 
     Args:
-        summary: Description structurée produite par CRAgent
-        state: AgentState existant à enrichir (optionnel)
-        max_iterations: Nombre max de retries
-        on_iteration_callback: Fonction appelée après chaque itération
-            Signature: callback(iteration: int, state: dict) -> None
-            Utile pour afficher l'avancement en temps réel dans Streamlit
-
-    Returns:
-        État final après le cycle (incluant html_code et review_feedback)
+        summary: description structurée du CRAgent
+        state: état existant (optionnel)
+        max_iterations: retries max
+        on_step_callback: fonction(step_name: str, state: dict) appelée après chaque étape
     """
     if state is None:
         state = initial_state()
     state = {
         **state,
-        "summary":        summary,
-        "max_iterations": max_iterations,
-        "iteration":      0,
-        "html_code":      "",
+        "summary":         summary,
+        "max_iterations":  max_iterations,
+        "iteration":       0,
+        "design_config":   None,
+        "shell_html":      "",
+        "views_html":      {},
+        "html_code":       "",
         "review_feedback": None,
-        "verdict":        "",
-        "quality_score":  0.0,
-        "errors":         [],
+        "quality_score":   0.0,
+        "verdict":         "",
+        "errors":          [],
     }
 
-    while True:
-        # Génération (initiale ou corrective)
-        state = generate_node(state)
-        if state.get("final_result") == "ERROR":
-            if on_iteration_callback:
-                on_iteration_callback(state.get("iteration", 0), state)
-            return state
+    def notify(step):
+        if on_step_callback:
+            on_step_callback(step, state)
 
+    # Étape 1 : Design
+    state = design_node(state)
+    notify("design")
+    if not state.get("design_config"):
+        return state
+
+    # Étape 2 : Shell
+    state = shell_node(state)
+    notify("shell")
+    if not state.get("shell_html"):
+        return state
+
+    # Étape 3 : Views
+    state = views_node(state)
+    notify("views")
+
+    # Étape 4 : Assemble
+    state = assemble_node(state)
+    notify("assemble")
+    if not state.get("html_code"):
+        return state
+
+    # Boucle review → retry ciblé
+    while True:
         # Review
         state = review_node(state)
+        notify("review")
 
-        # Callback pour Streamlit
-        if on_iteration_callback:
-            on_iteration_callback(state.get("iteration", 0), state)
-
-        # Décision : sortir ou retry ?
+        # Décision
         next_step = route_after_review(state)
         if next_step == "validate":
             break
-        # Sinon : boucle continue (next_step == "generate")
+
+        # Retry ciblé
+        state = targeted_retry_node(state)
+        notify("retry")
+
+    # Validation finale
+    state = validate_node(state)
+    notify("validate")
 
     return state
 
 
-# ════════════════════════════════════════════════════════════════════
-#  Utilitaire — visualisation du graphe (pour rapport / debug)
-# ════════════════════════════════════════════════════════════════════
-
 def draw_graph_mermaid() -> str:
-    """
-    Retourne une représentation Mermaid du graphe,
-    utilisable dans un markdown ou st.markdown().
-    """
     return get_graph().get_graph().draw_mermaid()

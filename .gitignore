@@ -39,3 +39,7 @@ uploads/
 test_*.py
 
 experiments/results/
+*.html
+*.xlsx
+*.md
+*.json

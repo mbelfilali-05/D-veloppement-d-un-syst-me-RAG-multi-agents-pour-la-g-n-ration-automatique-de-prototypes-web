@@ -77,26 +77,26 @@ RUBRIQUES DE SCORING :
    4 = 80-95% des pages mentionnées
    5 = 100% des pages mentionnées, rien de manquant
 
-2. structure — Le résumé est-il organisé de façon exploitable par un générateur de code ?
+2. structure — Le résumé est-il organisé de façon claire et hiérarchisée ?
    1 = texte libre, aucune structure
-   2 = structure partielle, incohérente
-   3 = structure présente mais inégale selon les pages
-   4 = format cohérent sur toutes les pages, quelques lacunes mineures
-   5 = format parfaitement cohérent, immédiatement parsable
+   2 = structure partielle ou confuse
+   3 = structure présente mais inégale (ex: titres manquants)
+   4 = format Markdown cohérent sur toutes les pages
+   5 = structure Markdown parfaite, titres et puces systématiques
 
-3. precision — Les composants UI sont-ils décrits avec assez de détail pour générer du code ?
-   1 = composants absents ou trop vagues ("interface utilisateur")
-   2 = composants nommés mais sans détail ("un formulaire")
-   3 = composants décrits avec type mais sans données ("formulaire de connexion")
-   4 = composants décrits avec type et données ("formulaire : email + mot de passe")
-   5 = composants décrits avec type, données, interactions et états
+3. precision — Les composants UI sont-ils décrits avec assez de détail ?
+   1 = composants absents ou trop vagues
+   2 = composants nommés mais sans détail
+   3 = composants avec type (ex: input, bouton)
+   4 = composants avec type et libellés précis (ex: bouton "Valider")
+   5 = composants complets : type, libellés, et colonnes/champs détaillés
 
-4. fidelite — Le résumé se limite-t-il à ce qui est dans le CDC, sans invention ?
-   1 = nombreuses pages ou fonctionnalités inventées absentes du CDC
+4. fidelite — Le résumé se limite-t-il au contenu du CDC ?
+   1 = nombreuses inventions
    2 = quelques inventions significatives
-   3 = inventions mineures ou hypothèses non signalées
-   4 = très fidèle, au plus 1-2 ajouts mineurs signalés [À PRÉCISER]
-   5 = parfaitement fidèle, zéro invention, incertitudes explicitement signalées
+   3 = 1-2 inventions mineures
+   4 = fidèle, mais manque de précision sur les zones de doute
+   5 = parfaitement fidèle, aucune fonctionnalité ou page inventée
 
 5. exploitabilite — Ce résumé peut-il être utilisé directement pour générer un prototype HTML ?
    1 = inutilisable tel quel

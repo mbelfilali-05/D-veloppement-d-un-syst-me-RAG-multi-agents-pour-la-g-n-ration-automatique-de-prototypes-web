@@ -144,7 +144,7 @@ class ShellAgent(BaseAgent):
             default_view = views[0]["id"] if views else "accueil"
             primary_color = design_config.get("palette", {}).get("primary", "#4F46E5")
 
-            raw = self.chain.invoke({
+            raw = self._tracked_invoke({
                 "design_config_text": config_text,
                 "default_view": default_view,
                 "primary_color": primary_color,

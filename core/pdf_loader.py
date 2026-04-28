@@ -70,7 +70,7 @@ class PDFLoader:
             page_counters[p] += 1
 
         # Filtre les chunks trop courts (parasites sémantiques)
-        MIN_CHUNK_SIZE = 100  # caractères
+        MIN_CHUNK_SIZE = 30  # caractères
         chunks = [c for c in raw_chunks if len(c.page_content.strip()) >= MIN_CHUNK_SIZE]
         print(f"✂️  Après filtrage : {len(chunks)} chunks valides")
    

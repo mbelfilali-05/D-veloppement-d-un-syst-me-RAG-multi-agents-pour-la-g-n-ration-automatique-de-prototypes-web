@@ -80,7 +80,7 @@ def mechanical_check(html: str) -> list[dict]:
             issues.append({
                 "vue": "global",
                 "severity": "medium",
-                "description": f"Noms d'icônes Material Icons en texte brut (pas de CDN Material Icons chargé) : {', '.join(set(icon_patterns)[:3])}",
+                "description": f"Noms d'icônes Material Icons en texte brut (pas de CDN Material Icons chargé) : {', '.join(list(set(icon_patterns)[:3]))}",
                 "suggestion": "Ajouter le CDN Material Icons dans le <head>, ou remplacer par des icônes Flowbite/SVG inline.",
                 "source": "mechanical",
             })
@@ -480,7 +480,7 @@ class ReviewerAgent(BaseAgent):
         # ── Couche 3 : Évaluation sémantique LLM ─────────────────
         self._log("  Couche 3 — évaluation sémantique LLM...")
         try:
-            raw = self.chain.invoke({
+            raw = self._tracked_invoke({
                 "summary":          summary,
                 "html_code":        html_code,
                 "pre_check_issues": pre_check_text,

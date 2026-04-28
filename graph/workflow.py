@@ -83,8 +83,7 @@ def analyze_node(state: AgentState) -> AgentState:
     chunks = loader.load(pdf_path)
 
     vs = VectorStore()
-    if not vs.load():
-        vs.create(chunks)
+    vs.create(chunks)
 
     cr_agent = CRAgent(vector_store=vs)
     state = cr_agent.run(state)

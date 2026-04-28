@@ -222,7 +222,7 @@ class ViewAgent(BaseAgent):
             views_desc = self._build_views_description(batch, summary)
 
             try:
-                raw = self.chain.invoke({
+                raw = self._tracked_invoke({
                     "design_config_text": config_text,
                     "views_to_generate": views_desc,
                     "primary_color": primary_color,
@@ -280,7 +280,7 @@ class ViewAgent(BaseAgent):
 
         views_desc = self._build_views_description([view_info], summary)
 
-        raw = self.chain.invoke({
+        raw = self._tracked_invoke({
             "design_config_text": config_text,
             "views_to_generate": views_desc,
             "primary_color": primary_color,

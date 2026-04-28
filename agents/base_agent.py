@@ -3,6 +3,7 @@
 from abc import ABC, abstractmethod
 from langchain_openai import ChatOpenAI
 from core.llm_config import get_llm
+from utils.token_tracker import TokenTracker
 
 
 class BaseAgent(ABC):
@@ -48,7 +49,14 @@ class BaseAgent(ABC):
             dict: L'AgentState mis à jour
         """
         pass
-
+    def _tracked_invoke(self, inputs: dict) -> str:
+    #Invoke la chain avec tracking des tokens.
+        with TokenTracker(self.name) as tracker:
+            result = self.chain.invoke(inputs)
+        self.last_token_usage = tracker.total_tokens
+        tracker.report()
+        return result
+    
     def _log(self, message: str):
         """Helper pour logger avec le nom de l'agent."""
         print(f"[{self.name}] {message}")

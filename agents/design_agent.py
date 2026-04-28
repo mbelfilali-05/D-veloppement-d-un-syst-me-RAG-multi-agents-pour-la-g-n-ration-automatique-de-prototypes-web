@@ -158,7 +158,7 @@ class DesignAgent(BaseAgent):
             }
 
         try:
-            raw = self.chain.invoke({"summary": summary})
+            raw = self._tracked_invoke({"summary": summary})
             config = self._parse_json(raw)
 
             if config is None:
